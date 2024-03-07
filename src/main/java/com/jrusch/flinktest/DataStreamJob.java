@@ -20,12 +20,14 @@ package com.jrusch.flinktest;
 
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.streaming.api.datastream.AsyncDataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.connectors.kinesis.FlinkKinesisConsumer;
 import org.apache.flink.streaming.connectors.kinesis.config.ConsumerConfigConstants;
 
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Skeleton for a Flink DataStream Job.
@@ -59,8 +61,23 @@ public class DataStreamJob {
 			// Decrypt the data stream
 			DataStream<ActivityRecords> decryptedDataStream = kinesisSource.map(new KMSDecryptFunction());
 
-			// Print the data stream
-			decryptedDataStream.filter(value -> value != null).print();
+			// Filter out ActivityEvents in the ActivityRecords where objectType is not "TABLE"
+			// and objectName is not "reviews"
+			DataStream<ActivityEvent> filteredDataStream = decryptedDataStream.flatMap(new FilterAndFlattenActivityEvents());
+
+			DataStream<Review> reviewDataStream = filteredDataStream.map(new ActivityEventToReview());
+
+			// Enrich the Review data stream with data from the database
+			DataStream<Review> enrichedReviewDataStream = AsyncDataStream.unorderedWait(
+					reviewDataStream,
+					new AsyncDatabaseEnrichmentFunction(),
+					1000,
+					TimeUnit.MILLISECONDS,
+					5
+			);
+
+			// Print the enriched review data stream
+			enrichedReviewDataStream.print();
 
 			// Execute the job
 			env.execute("Flink Kinesis Data Stream Job");
